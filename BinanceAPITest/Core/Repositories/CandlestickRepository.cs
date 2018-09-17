@@ -12,7 +12,7 @@ using Serilog;
 
 namespace BinanceAPITest.Core.Repositories
 {
-    public class DatabaseRepository : IDatabaseRespository
+    public class CandlestickRepository : ICandlestickRepository
     {
         private readonly string _connectionString;
 
@@ -24,7 +24,7 @@ namespace BinanceAPITest.Core.Repositories
             }
         }
 
-        public DatabaseRepository(string connectionString)
+        public CandlestickRepository(string connectionString)
         {
             _connectionString = connectionString;
         }
@@ -80,7 +80,6 @@ namespace BinanceAPITest.Core.Repositories
 
         public void InsertBulk(IEnumerable<Candlestick> candlesticks)
         {
-
             var sql =  new StringBuilder(@"INSERT INTO public.klines(symbol, ""openTime"", open, high, low, close, ""closeTime"", ""quoteAssetVolume"", ""numberOfTrades"", ""baseVolume"", ""quoteVolume"") ");
             foreach(var candlestick in candlesticks)
             {
@@ -88,41 +87,11 @@ namespace BinanceAPITest.Core.Repositories
                 sql.AppendLine("UNION ALL");
             }
             sql.Remove(sql.Length - 9, 9); // trim the last UNION ALL
-
-            Log.Logger.ForContext("Action", "InsertBulk")
-                .Debug(sql.ToString());
-
+          
             using (IDbConnection connection = Connection)
             {
                 connection.Execute(sql.ToString());
-            }
-
-
-            //using (SqlBulkCopy copy = new SqlBulkCopy(_connectionString))
-            //{
-            //    copy.DestinationTableName = "Quotes";
-            //    DataTable table = new DataTable("Quotes");
-            //    table.Columns.Add("symbol", typeof(string));
-            //    table.Columns.Add("openTime", typeof(DateTime));
-            //    table.Columns.Add("open", typeof(decimal));
-            //    table.Columns.Add("high", typeof(decimal));
-            //    table.Columns.Add("low", typeof(decimal));
-            //    table.Columns.Add("close", typeof(decimal));
-            //    table.Columns.Add("volume", typeof(decimal));
-            //    table.Columns.Add("closeTime", typeof(DateTime));
-            //    table.Columns.Add("quoteAssetVolume", typeof(decimal));
-            //    table.Columns.Add("numberOfTrades", typeof(int));
-            //    table.Columns.Add("baseVolume", typeof(decimal));
-            //    table.Columns.Add("quoteVolume", typeof(decimal));
-
-            //    foreach(var candlestick in candlesticks)
-            //    {
-            //        table.Rows.Add(candlestick.Symbol, candlestick.OpenTime, candlestick.Open, candlestick.High, candlestick.Low, candlestick.Close, candlestick.Volume, candlestick.CloseTime, candlestick.QuoteAssetVolume, candlestick.NumberOfTrades, candlestick.TakerBuyBaseAssetVolume, candlestick.TakerBuyQuoteAssetVolume);
-            //    }
-
-            //    // TODO: Make async?
-            //    copy.WriteToServer(table);
-            //}
+            }         
         }
 
         public void Update(Candlestick candlestick, int klinesId)
@@ -142,10 +111,31 @@ namespace BinanceAPITest.Core.Repositories
         public DateTime? GetStartDate(Symbol symbol)
         {
             var sql = "SELECT start_date from start_dates WHERE symbol = @symbol";
-            DateTime? startDate = null;
+            var startDate = default(DateTime?);
             using (IDbConnection connection = Connection)
             {
                 startDate = connection.Query<DateTime?>(sql, new { symbol = symbol.ToString()}).FirstOrDefault();
+            }
+
+            return startDate;
+        }
+
+        public IEnumerable<ExchangeStartInfo> GetStartDates()
+        {
+            var sql = "SELECT start_date as \"StartDate\", symbol as \"SymbolLabel\" from start_dates";            
+            using (IDbConnection connection = Connection)
+            {
+                return connection.Query<ExchangeStartInfo>(sql);
+            }           
+        }
+
+        public DateTime? GetNextDate(Symbol symbol)
+        {
+            var sql = "SELECT \"closeTime\" from klines WHERE symbol = @symbol order by \"closeTime\" desc limit 1";
+            DateTime? startDate = null;
+            using (IDbConnection connection = Connection)
+            {
+                startDate = connection.Query<DateTime?>(sql, new { symbol = symbol.ToString() }).FirstOrDefault();
             }
 
             return startDate;

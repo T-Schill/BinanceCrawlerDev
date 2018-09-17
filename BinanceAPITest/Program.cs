@@ -56,74 +56,27 @@ namespace BinanceAPITest
                     .BuildServiceProvider();
 
                 var api = ServiceProvider.GetService<IBinanceApi>();
-                var database = new DatabaseRepository(connectionString);  
+                var candlestickRepository = new CandlestickRepository(connectionString);
+                var binanceDataFacade = new BinanceDataFacade(api, candlestickRepository);
 
-                var startDateData = database.GetStartDate(Symbol.ETH_BTC).Value;
-                var startDate = new DateTime(startDateData.Ticks, DateTimeKind.Utc);
-                var endDate = startDate.AddMinutes(999);
-                var iterations = 20;
-                var pageSize = 1000;
-                var symbol = Symbol.ETH_USDT;
-                var stopwatch = new Stopwatch();
-                stopwatch.Start();
-
-                for (var i = 0; i < iterations; i++)
+                var symbols = binanceDataFacade.InitializeSymbols().Result;
+                foreach(var symbol in symbols)
                 {
-                    var candlesticks = api.GetCandlesticksAsync(symbol, CandlestickInterval.Minute, startDate, endDate, pageSize).Result;
-
-                    //foreach (var candlestick in candlesticks)
-                    //{
-                    //    database.Insert(candlestick);
-                    //}
-                    database.InsertBulk(candlesticks);
-                    Log.Logger.ForContext("Action", "LogCandlestickBulk")
-                          .Verbose("Logged Candlesticks for Symbol {Symbol} for range {StartTime} to {EndTime}", symbol, startDate, endDate);
-
-                    var metrics = database.GetTableMetrics("klines");
-
-                    Log.Logger.ForContext("Action", "KlinesMetrics")
-                        .Debug($"Klines table size {{Size}} ({metrics.Size.PrettyBytes()}). External size {{ExternalSize}} ({metrics.ExternalSize.PrettyBytes()})", metrics.Size, metrics.ExternalSize);
-
-                    Log.Logger.ForContext("Action", "LogCandlestickBulk")
-                        .Debug("Elapsed time {ElapsedMilliseconds}. Total records parsed {TotalRecords}", stopwatch.ElapsedMilliseconds, i * pageSize);
-
-                    startDate = endDate;
-                    endDate = startDate.AddMinutes(999);
-
+                    try
+                    {
+                        binanceDataFacade.CrawlSymbol(symbol).Wait();
+                    }
+                    catch(Exception e)
+                    {
+                        Log.Logger.Error(e, "Error crawling symbol '{Symbol}'", symbol);
+                    }                    
                 }
-
-               
-
-               
-
-                //var interval = startDate;
-                
-                //while(interval < endDate)
-                //{
-                //    var loggedCandlestick = database.Get(Symbol.ETH_BTC, interval);
-                //    if(loggedCandlestick != null)
-                //    {
-                //        Log.Logger.ForContext("Action", "LogCandlestick")
-                //            .Verbose("Logged Candlestick for Symbol {Symbol} for open time {OpenTime}", loggedCandlestick.Symbol, loggedCandlestick.OpenTime);
-                //        interval = interval.AddMinutes(1);
-                //    }
-                  
-                //}
 
             }
             catch(Exception e)
             {
                Log.Logger.Fatal(e, "Uncaught exceptions. Program aborting.");               
-            }
-            //var api = new BinanceApi();
-
-            //var data = api.GetCandlesticksAsync(Symbol.ETC_BTC, CandlestickInterval.Minute, (1510617600000, 1510646880000)).Result;
-
-            //var lastKline = data.FirstOrDefault();
-            //var epochTime = new DateTimeOffset(lastKline.OpenTime, TimeSpan.Zero);
-            //Console.WriteLine(epochTime.ToUnixTimeMilliseconds());
-
-            //Console.WriteLine(JsonConvert.SerializeObject(data, Formatting.Indented));
+            }          
 
             if(Environment.UserInteractive)
             {
