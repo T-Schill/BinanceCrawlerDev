@@ -51,12 +51,12 @@ namespace BinanceAPITest.Core.Repositories
             return null;
         }
 
-        public void Insert(Candlestick candlestick)
+        public void Insert(Candlestick candlestick, string exchange = "Binance")
         {
             var openTime = new DateTime(candlestick.OpenTime.Year, candlestick.OpenTime.Month, candlestick.OpenTime.Day, candlestick.OpenTime.Hour, candlestick.OpenTime.Minute, 0);
             var closeTime = new DateTime(candlestick.CloseTime.Year, candlestick.CloseTime.Month, candlestick.CloseTime.Day, candlestick.CloseTime.Hour, candlestick.CloseTime.Minute, 0);
-            var sql = @"INSERT INTO public.klines(""openTime"", open, high, low, close, ""closeTime"", ""quoteAssetVolume"", ""numberOfTrades"", ""baseVolume"", ""quoteVolume"", symbol)
-                VALUES(@openTime, @open, @high, @low, @close, @closeTime, @quoteAssetVolume, @numberOfTrades, @baseVolume, @quoteVolume, @symbol); ";
+            var sql = @"INSERT INTO public.klines(""openTime"", open, high, low, close, ""closeTime"", ""quoteAssetVolume"", ""numberOfTrades"", ""baseVolume"", ""quoteVolume"", symbol, exchange)
+                VALUES(@openTime, @open, @high, @low, @close, @closeTime, @quoteAssetVolume, @numberOfTrades, @baseVolume, @quoteVolume, @symbol, @exchange); ";
             var parameters = new
             {
                 openTime,
@@ -70,7 +70,8 @@ namespace BinanceAPITest.Core.Repositories
                 numberOfTrades = candlestick.NumberOfTrades,
                 baseVolume = candlestick.TakerBuyBaseAssetVolume,
                 quoteVolume = candlestick.TakerBuyQuoteAssetVolume,
-                symbol = candlestick.Symbol
+                symbol = candlestick.Symbol,
+                exchange
             };
             using (IDbConnection connection = Connection)
             {
@@ -78,12 +79,12 @@ namespace BinanceAPITest.Core.Repositories
             }
         }
 
-        public void InsertBulk(IEnumerable<Candlestick> candlesticks)
+        public void InsertBulk(IEnumerable<Candlestick> candlesticks, string exchange = "Binance")
         {
-            var sql =  new StringBuilder(@"INSERT INTO public.klines(symbol, ""openTime"", open, high, low, close, ""closeTime"", ""quoteAssetVolume"", ""numberOfTrades"", ""baseVolume"", ""quoteVolume"") ");
+            var sql =  new StringBuilder(@"INSERT INTO public.klines(symbol, ""openTime"", open, high, low, close, ""closeTime"", ""quoteAssetVolume"", ""numberOfTrades"", ""baseVolume"", ""quoteVolume"", exchange) ");
             foreach(var candlestick in candlesticks)
             {
-                sql.AppendLine($"SELECT '{candlestick.Symbol}', '{candlestick.OpenTime.ToString("yyyy-MM-dd HH:mm:ss")}'::timestamp, {candlestick.Open}, {candlestick.High}, {candlestick.Low}, {candlestick.Close}, '{candlestick.CloseTime.ToString("yyyy-MM-dd HH:mm:ss")}'::timestamp, {candlestick.Volume}, {candlestick.NumberOfTrades}, {candlestick.TakerBuyBaseAssetVolume}, {candlestick.TakerBuyQuoteAssetVolume}");
+                sql.AppendLine($"SELECT '{candlestick.Symbol}', '{candlestick.OpenTime.ToString("yyyy-MM-dd HH:mm:ss")}'::timestamp, {candlestick.Open}, {candlestick.High}, {candlestick.Low}, {candlestick.Close}, '{candlestick.CloseTime.ToString("yyyy-MM-dd HH:mm:ss")}'::timestamp, {candlestick.Volume}, {candlestick.NumberOfTrades}, {candlestick.TakerBuyBaseAssetVolume}, {candlestick.TakerBuyQuoteAssetVolume}, '{exchange}'");
                 sql.AppendLine("UNION ALL");
             }
             sql.Remove(sql.Length - 9, 9); // trim the last UNION ALL
@@ -129,13 +130,13 @@ namespace BinanceAPITest.Core.Repositories
             }           
         }
 
-        public DateTime? GetNextDate(Symbol symbol)
+        public DateTime? GetNextDate(Symbol symbol, string exchange = "Binance")
         {
-            var sql = "SELECT \"closeTime\" from klines WHERE symbol = @symbol order by \"closeTime\" desc limit 1";
+            var sql = "SELECT \"closeTime\" from klines WHERE symbol = @symbol and exchange = @exchange order by \"closeTime\" desc limit 1";
             DateTime? startDate = null;
             using (IDbConnection connection = Connection)
             {
-                startDate = connection.Query<DateTime?>(sql, new { symbol = symbol.ToString() }).FirstOrDefault();
+                startDate = connection.Query<DateTime?>(sql, new { symbol = symbol.ToString(), exchange }).FirstOrDefault();
             }
 
             return startDate;

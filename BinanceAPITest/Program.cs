@@ -37,17 +37,13 @@ namespace BinanceAPITest
                    .MinimumLevel.Verbose()
                    .Enrich.WithMachineName()
                    .Enrich.WithEnvironmentUserName()
-                   .Enrich.WithProperty("Source", "FinaScope BinanceCrawler 0.1")                  
+                   .Enrich.WithProperty("Source", "FinaScope BinanceCrawler 0.1")  
                    .WriteTo.Console()
                    .WriteTo.PostgreSQL(connectionString, "logs", ColumnConfiguration.GetColumnConfiguration(), needAutoCreateTable: true)
                    .CreateLogger();
 
-           
-            
-
             try
             {
-                
                 ServiceProvider = new ServiceCollection()
                     .AddBinance()
                     .AddOptions()
@@ -55,22 +51,36 @@ namespace BinanceAPITest
                     .AddLogging(builder => builder.AddSerilog(Log.Logger))
                     .BuildServiceProvider();
 
+                var maintenceWindowHours = Convert.ToInt32(Configuration.GetSection("CrawlOptions:MaintenanceWindowHours").Value);
+
                 var api = ServiceProvider.GetService<IBinanceApi>();
                 var candlestickRepository = new CandlestickRepository(connectionString);
-                var binanceDataFacade = new BinanceDataFacade(api, candlestickRepository);
+                var binanceDataFacade = new BinanceDataFacade(maintenceWindowHours, api, candlestickRepository);
 
                 var symbols = binanceDataFacade.InitializeSymbols().Result;
-                foreach(var symbol in symbols)
+                var stopwatch = new Stopwatch();
+                stopwatch.Start();
+                var symbolCount = 1;
+                var totalSymbols = symbols.Count();
+                foreach (var symbol in symbols)
                 {
                     try
                     {
-                        binanceDataFacade.CrawlSymbol(symbol).Wait();
+                        Log.Logger.ForContext("Action", "CrawlSymbol")
+                            .Information("Begin crawling symbol {Symbol}", symbol.SymbolLabel);
+                        binanceDataFacade.CrawlSymbol(symbol).Wait();                       
                     }
-                    catch(Exception e)
+                    catch (Exception e)
                     {
-                        Log.Logger.Error(e, "Error crawling symbol '{Symbol}'", symbol);
-                    }                    
+                        Log.Logger.ForContext("Action", "CrawlSymbol")
+                            .Error(e, "Error crawling symbol {Symbol}", symbol.SymbolLabel);
+                    }
+                    Log.Logger.ForContext("Action", "CrawlSymbol")
+                        .Information("Finished crawling symbol {Symbol}. Total elapsed time: {ElapsedTimeTotal}. Symbol {SymbolCount} of {TotalSymbols}", symbol.SymbolLabel, stopwatch.Elapsed, symbolCount++, totalSymbols);
                 }
+
+                Log.Logger.ForContext("Action", "CrawlSymbol")
+                    .Information("Finished crawling all symbols. Total elapsed time: {ElapsedTimeTotal}", stopwatch.Elapsed);
 
             }
             catch(Exception e)

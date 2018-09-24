@@ -17,7 +17,7 @@ namespace BinanceAPITest.Core.Logging
             {
                 {"message", new RenderedMessageColumnWriter(NpgsqlDbType.Text) },               
                 {"level", new LevelColumnWriter(true, NpgsqlDbType.Varchar) },
-                {"raise_date", new TimestampColumnWriter(NpgsqlDbType.Timestamp) },
+                {"raise_date", new TimestampColumnWriter(NpgsqlDbType.TimestampTz) },
                 {"exception", new ExceptionColumnWriter(NpgsqlDbType.Text) },             
                 {"properties", new PropertiesColumnWriter(NpgsqlDbType.Jsonb) },
                 {"machine_name", new SinglePropertyColumnWriter("MachineName", PropertyWriteMethod.ToString, NpgsqlDbType.Text, "l") },
