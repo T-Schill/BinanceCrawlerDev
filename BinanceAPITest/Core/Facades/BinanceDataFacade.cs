@@ -15,13 +15,17 @@ namespace BinanceAPITest.Core.Facades
     {
         private readonly IBinanceApi _api;
         private readonly ICandlestickRepository _candlestickRepository;
-        private readonly int _maintenanceWindowHours;
+        private readonly IEnumerable<string> _onlySymbols;
+        private readonly IEnumerable<string> _excludeSymbols;
+        private readonly string _startSymbol;
 
-        public BinanceDataFacade(int maintenanceWindowHours,IBinanceApi api, ICandlestickRepository candlestickRepository)
-        {
-            _maintenanceWindowHours = maintenanceWindowHours;
+        public BinanceDataFacade(IBinanceApi api, ICandlestickRepository candlestickRepository, IEnumerable<string> onlySymbols, IEnumerable<string> excludeSymbols, string startSymbol)
+        {            
             _api = api;
             _candlestickRepository = candlestickRepository;
+            _onlySymbols = onlySymbols;
+            _excludeSymbols = excludeSymbols;
+            _startSymbol = startSymbol;
         }
 
         public async Task<IEnumerable<ExchangeStartInfo>> InitializeSymbols()
@@ -29,11 +33,27 @@ namespace BinanceAPITest.Core.Facades
             var symbols = await _api.GetSymbolsAsync();
             var loggedExchangeStartInfo = _candlestickRepository.GetStartDates();
             var exchangeStartInfo = new List<ExchangeStartInfo>();
-            var count = 1;
-            var initialDate = new DateTime(2015, 1, 1, 12, 0, 0, DateTimeKind.Utc); // This should go far enough back before all Exchange APIs 
-            var latestStartDate = default(DateTime?); 
+            var count = 1;           
+            var latestStartDate = default(DateTime?);
+            var hasStartSymbolConfigured = !string.IsNullOrEmpty(_startSymbol);
+            var startSymbolTriggered = !hasStartSymbolConfigured;
             foreach (var symbol in symbols)
             {
+
+                if(hasStartSymbolConfigured && symbol == _startSymbol)
+                {
+                    startSymbolTriggered = true;
+                }
+
+                if(!startSymbolTriggered)
+                {
+                    continue;
+                }
+
+                if((_onlySymbols.Any() && !_onlySymbols.Contains(symbol)) || _excludeSymbols.Any(s => s == symbol))
+                {
+                    continue;
+                }              
                 var info = loggedExchangeStartInfo.FirstOrDefault(i => i.SymbolLabel == symbol);
                 if (info != null)
                 {
@@ -45,7 +65,7 @@ namespace BinanceAPITest.Core.Facades
                     latestStartDate = info.StartDate;
                     continue;
                 }
-                var startDate = await GetStartDate(symbol);
+                var startDate = await GetStartDate(symbol, null);
                 if (startDate.HasValue)
                 {
                     Log.Logger.ForContext("Action", "InitializeSymbols")
@@ -59,7 +79,6 @@ namespace BinanceAPITest.Core.Facades
                        .Error($"Failed to find start date for symbol {symbol}. {count++} of {symbols.Count()}");
                 }
             }
-
 
             return exchangeStartInfo;
         }
@@ -91,31 +110,30 @@ namespace BinanceAPITest.Core.Facades
             var stopwatch = new Stopwatch();
             stopwatch.Start();            
 
-            var candlesticks = GetCandlesticks(info.Symbol, ref startDate, ref endDate, pageSize);
+            var candleSticksBatch = await GetNextCandlesticks(info.Symbol, startDate, endDate, pageSize);
 
-            while(candlesticks.Any())
+            while(candleSticksBatch.CandleSticks.Any())
             {
-                _candlestickRepository.InsertBulk(candlesticks, "Binance");
+                _candlestickRepository.InsertBulk(candleSticksBatch.CandleSticks, "Binance");
 
                 Log.Logger.ForContext("Action", "CrawlSymbol")
-                      .Verbose("Logged {Count} Candlesticks for Symbol {Symbol} for range {StartTime} to {EndTime}", candlesticks.Count(), info.Symbol, startDate, endDate);
+                      .Verbose("Logged {Count} Candlesticks for Symbol {Symbol} for range {StartTime} to {EndTime}", candleSticksBatch.CandleSticks.Count(), info.Symbol, startDate, endDate);
 
-                recordsParsed += candlesticks.Count();
-
-                if (Log.Logger.IsEnabled(Serilog.Events.LogEventLevel.Debug))
-                {
-                    var metrics = _candlestickRepository.GetTableMetrics("klines");
-                    Log.Logger.ForContext("Action", "KlinesMetrics")
-                        .Debug($"Klines table size {{Size}} ({metrics.Size.PrettyBytes()}). External size {{ExternalSize}} ({metrics.ExternalSize.PrettyBytes()})", metrics.Size, metrics.ExternalSize);
-                }
-
+                recordsParsed += candleSticksBatch.CandleSticks.Count();
 
                 Log.Logger.ForContext("Action", "CrawlSymbol")
                     .Debug("Elapsed time {ElapsedMilliseconds}. {TotalRecords} candlesticks recorded for {Symbol}", stopwatch.ElapsedMilliseconds, recordsParsed, info.Symbol);
 
                 startDate = endDate;
                 endDate = startDate.AddMinutes(999);
-                candlesticks = GetCandlesticks(info.Symbol, ref startDate, ref endDate, pageSize);
+                candleSticksBatch = await GetNextCandlesticks(info.Symbol, startDate, endDate, pageSize);
+            }
+
+            if (Log.Logger.IsEnabled(Serilog.Events.LogEventLevel.Debug))
+            {
+                var metrics = _candlestickRepository.GetTableMetrics("klines");
+                Log.Logger.ForContext("Action", "KlinesMetrics")
+                    .Debug($"Klines table size {{Size}} ({metrics.Size.PrettyBytes()}). External size {{ExternalSize}} ({metrics.ExternalSize.PrettyBytes()})", metrics.Size, metrics.ExternalSize);
             }
         }
 
@@ -126,11 +144,11 @@ namespace BinanceAPITest.Core.Facades
         /// </summary>
         /// <param name="symbol">The symbol to use for the search</param>
         /// <returns></returns>
-        public async Task<DateTime?> GetStartDate(Symbol symbol)
+        public async Task<DateTime?> GetStartDate(Symbol symbol, DateTime? initialDate)
         {
             try
             {
-                var startDate = new DateTime(2015, 1, 1, 12, 0, 0, DateTimeKind.Utc); // This should go far enough back before all Exchange APIs ;
+                var startDate = initialDate.HasValue ? new DateTime(initialDate.Value.Ticks, DateTimeKind.Utc) : new DateTime(2015, 1, 1, 12, 0, 0, DateTimeKind.Utc); // This should go far enough back before all Exchange APIs ;
               
                 var endDate = startDate.AddDays(999);
                 var candlesticks = await _api.GetCandlesticksAsync(symbol, CandlestickInterval.Day, startDate, endDate, 1000);
@@ -170,41 +188,56 @@ namespace BinanceAPITest.Core.Facades
         }
 
         /// <summary>
-        /// Gets the next set of candlesticks. Will take maintenance windows into account.
-        /// Will update the startDate and endDate via ref until it comes to the present,
-        /// or the maintenance window threshhold has been reached.
+        /// Gets the next set of candlesticks. Will take maintenance windows and long coin swaps into account for gaps in data.
         /// </summary>
         /// <param name="symbol">Symbol to fetch</param>
         /// <param name="startDate">Start of the time frame</param>
         /// <param name="endDate">End of the time frame</param>
         /// <param name="pageSize">Page size to fetch</param>
-        /// <returns></returns>
-        private IEnumerable<Candlestick> GetCandlesticks(string symbol, ref DateTime startDate, ref DateTime endDate, int pageSize)
+        /// <returns>CandleStickBatch with the result candlesticks and startDate\endDate for the actual next range found.</returns>
+        private async Task<CandleSticksBatch> GetNextCandlesticks(Symbol symbol, DateTime startDate, DateTime endDate, int pageSize)
         {
-            var candleSticks = _api.GetCandlesticksAsync(symbol, CandlestickInterval.Minute, startDate, endDate, pageSize).Result;
-            var maintenanceWindowHoursCount = 0;
+            var candleSticks = await _api.GetCandlesticksAsync(symbol, CandlestickInterval.Minute, startDate, endDate, pageSize);
+            var candleStickBatch = new CandleSticksBatch()
+            {
+                CandleSticks = candleSticks,
+                StartDate = startDate,
+                EndDate = endDate
+            };
             if(!candleSticks.Any() && startDate > DateTime.UtcNow)
             {
                 Log.Logger.ForContext("Action", "GetCandleSticks")
                     .Debug("Caught up on candlesticks for symbol {Symbol}", symbol);
-                return candleSticks;
+                return candleStickBatch;
             }
-
-            while(!candleSticks.Any() && maintenanceWindowHoursCount < _maintenanceWindowHours)
+            else if(!candleSticks.Any())
             {
-                maintenanceWindowHoursCount += pageSize/60;
-                startDate = endDate;
-                endDate = startDate.AddMinutes(pageSize);
-                candleSticks = _api.GetCandlesticksAsync(symbol, CandlestickInterval.Minute, startDate, endDate, pageSize).Result;
+                var nextDate = await GetStartDate(symbol, endDate);
+                if(!nextDate.HasValue)
+                {
+                    Log.Logger.ForContext("Action", "GetCandleSticks")
+                        .Information("No more candlesticks found for {Symbol}. End of data at {EndDate}", symbol, endDate);
+                    return candleStickBatch;
+                }
+                candleStickBatch.StartDate = nextDate.Value;
+                candleStickBatch.EndDate = startDate.AddMinutes(pageSize);
+                candleStickBatch.CandleSticks = await _api.GetCandlesticksAsync(symbol, CandlestickInterval.Minute, candleStickBatch.StartDate, candleStickBatch.EndDate, pageSize);
             }
 
-            if(maintenanceWindowHoursCount >= _maintenanceWindowHours)
-            {
-                Log.Logger.ForContext("Action", "GetCandleSticks")
-                    .Debug("Maintenance window closed for symbol {Symbol}. Likely end of data at {EndDate}", symbol, endDate);
-            }
+            //while(!candleSticks.Any() && maintenanceWindowHoursCount < _maintenanceWindowHours)
+            //{
+            //    maintenanceWindowHoursCount += pageSize/60;
+            //    startDate = endDate;
+            //    endDate = startDate.AddMinutes(pageSize);
+            //    candleSticks = _api.GetCandlesticksAsync(symbol, CandlestickInterval.Minute, startDate, endDate, pageSize).Result;
+            //}
 
-            return candleSticks;
+            //if(maintenanceWindowHoursCount >= _maintenanceWindowHours)
+            //{
+                
+            //}
+
+            return candleStickBatch;
         }
     }
 }

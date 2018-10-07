@@ -15,6 +15,7 @@ using BinanceAPITest.Core.Facades;
 using BinanceAPITest.Core.Logging;
 using BinanceAPITest.Core;
 using System.Diagnostics;
+using System.Collections.Generic;
 
 namespace BinanceAPITest
 {
@@ -33,14 +34,32 @@ namespace BinanceAPITest
                                     .Build();
 
             var connectionString = Configuration.GetConnectionString("DefaultConnection");
+            var logLevel = Configuration.GetValue<string>("Logging:LogLevel") ?? "Information";
+            var onlySymbolsString = Configuration.GetValue<string>("CrawlOptions:OnlySymbols");
+            var onlySymbols = new List<string>();
+            if(!string.IsNullOrWhiteSpace(onlySymbolsString))
+            {
+                onlySymbols = onlySymbolsString.Split(',').ToList();
+            }
+            var excludeSymbolsString = Configuration.GetValue<string>("CrawlOptions:ExcludeSymbols");
+            var excludeSymbols = new List<string>();
+            if (!string.IsNullOrWhiteSpace(excludeSymbolsString))
+            {
+                excludeSymbols = excludeSymbolsString.Split(',').ToList();
+            }
+
+            var startSymbol = Configuration.GetValue<string>("CrawlOptions:StartSymbol");
             Log.Logger = new LoggerConfiguration()
-                   .MinimumLevel.Verbose()
+                   .MinimumLevel.ControlledBy(SerilogConfiguration.LoggingLevel)
                    .Enrich.WithMachineName()
                    .Enrich.WithEnvironmentUserName()
                    .Enrich.WithProperty("Source", "FinaScope BinanceCrawler 0.1")  
                    .WriteTo.Console()
                    .WriteTo.PostgreSQL(connectionString, "logs", ColumnConfiguration.GetColumnConfiguration(), needAutoCreateTable: true)
                    .CreateLogger();
+
+            SerilogConfiguration.SetLoggingLevel(logLevel);
+            Log.Logger.Debug("Running with the following crawl configuration. StartSymbol: {StartSymbol}. OnlySymbols: '{OnlySymbols}'. ExcludeSymbols: '{ExcludeSymbols}'", startSymbol, onlySymbolsString, excludeSymbolsString);
 
             try
             {
@@ -49,13 +68,11 @@ namespace BinanceAPITest
                     .AddOptions()
                     .Configure<BinanceApiOptions>(Configuration.GetSection("ApiOptions"))
                     .AddLogging(builder => builder.AddSerilog(Log.Logger))
-                    .BuildServiceProvider();
-
-                var maintenceWindowHours = Convert.ToInt32(Configuration.GetSection("CrawlOptions:MaintenanceWindowHours").Value);
+                    .BuildServiceProvider();                
 
                 var api = ServiceProvider.GetService<IBinanceApi>();
                 var candlestickRepository = new CandlestickRepository(connectionString);
-                var binanceDataFacade = new BinanceDataFacade(maintenceWindowHours, api, candlestickRepository);
+                var binanceDataFacade = new BinanceDataFacade(api, candlestickRepository, onlySymbols, excludeSymbols, startSymbol);
 
                 var symbols = binanceDataFacade.InitializeSymbols().Result;
                 var stopwatch = new Stopwatch();
